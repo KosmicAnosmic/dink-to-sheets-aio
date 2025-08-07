@@ -3,7 +3,7 @@ require('dotenv').config();
 const { google } = require('googleapis');
 
 const keyFile = process.env.GOOGLE_APPLICATION_CREDENTIALS || './credentials.json';
-const spreadsheetId = process.env.SPREADSHEET_ID;
+const spreadsheetId = process.env.SHEET_ID;
 
 let sheetsClient = null;
 async function getSheetsClient() {

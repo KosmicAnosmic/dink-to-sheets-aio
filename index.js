@@ -2,16 +2,15 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, Events } = require('discord.js');
 const { appendRow } = require('./sheets/googleSheetsClient');
-const routeEmbed = require('./router');
+const config = require('./pointsConfig.json');
+const { addPoints } = require('./pointsManager');
 
-// Dink bot user ID and channels to monitor
-const DINK_BOT_ID = '1380796448207278142';
-const TARGET_CHANNEL_IDS = [
-  '1380796083520671814',
-  '1381147284871577640',
-  '1382283615085264977',
-  '1271184883041042473'
-];
+const DINK_BOT_ID = process.env.DINK_BOT_ID;
+const TARGET_CHANNEL_IDS = (process.env.CHANNEL_IDS || '')
+  .split(',')
+  .map(id => id.trim())
+  .filter(Boolean);
+const SHEET_TAB_NAME = 'Loot Log';
 
 const client = new Client({
   intents: [
@@ -21,38 +20,110 @@ const client = new Client({
   ],
 });
 
+// helper to extract items as { qty, name }
+function extractItems(desc) {
+  const regex = /(\d+)\s*x\s*\[([^\]]+)\]/g;
+  const items = [];
+  let m;
+  while ((m = regex.exec(desc)) !== null) {
+    items.push({ qty: Number(m[1]), name: m[2] });
+  }
+  return items;
+}
+
+// strip markdown and gp suffix
+function cleanValue(raw) {
+  if (!raw) return '';
+  return raw
+    .replace(/```[\s\S]*?\n/, '')
+    .replace(/```/g, '')
+    .replace(/\s*gp$/i, '')
+    .replace(/,/g, '')
+    .trim();
+}
+
 client.once(Events.ClientReady, () => {
   console.log(`Logged in as ${client.user.tag}!`);
 });
 
 client.on(Events.MessageCreate, async (message) => {
-  // Debug log
   console.log(`[${message.channel.id}] [${message.author.id}] ${message.content || '[embed]'}`);
 
-  // Only process embeds from Dink in the target channels
   if (
     TARGET_CHANNEL_IDS.includes(message.channel.id) &&
     message.author.id === DINK_BOT_ID &&
     message.embeds.length > 0
   ) {
-    const embed = message.embeds[0];
-    console.log('Embed object:', JSON.stringify(embed, null, 2));
-
-    // Route to the correct parser/tab
-    const route = routeEmbed(embed);
-    if (!route) {
-      console.warn('No parser found for this embed. Skipping.');
-      return;
-    }
-
     try {
-      // Parse and append row
-      const row = route.parser(embed);
-      console.log(`Parsed row for "${route.tab}":`, row);
-      await appendRow(route.tab, row);
-      console.log(`Row appended to "${route.tab}" tab.`);
-    } catch (error) {
-      console.error('Error parsing or saving embed:', error);
+      const embed = message.embeds[0];
+      console.log('Embed object:', JSON.stringify(embed, null, 2));
+
+      const title = embed.title || '';
+      const player = embed.author?.name || '';
+      const desc = embed.description || '';
+      const timestamp = new Date().toISOString();
+
+      // parse items and fields
+      const items = extractItems(desc);
+      const vf = embed.fields.find(f => /total value/i.test(f.name));
+      const kcF = embed.fields.find(f => /kill count/i.test(f.name));
+      const value = vf ? cleanValue(vf.value) : '';
+      const kc = kcF ? cleanValue(kcF.value) : '';
+
+      // append to Loot Log
+      const row = [
+        title,
+        player,
+        items.map(i => `${i.qty} x ${i.name}`).join(' + '),
+        value,
+        desc.match(/From:\s*\[([^\]]+)\]/i)?.[1] || '',
+        kc,
+        timestamp,
+      ];
+      console.log('Parsed embed:', row);
+      await appendRow(SHEET_TAB_NAME, row);
+      console.log(`Row appended to "${SHEET_TAB_NAME}" tab.`);
+
+      // ── points calculation with whitelist and threshold ──
+      let earned = 0;
+
+      if (title === 'Loot Drop') {
+        // 1) Whitelist-based points
+        for (const { qty, name } of items) {
+          if (config.itemWhitelist.items[name] != null) {
+            earned += config.itemWhitelist.items[name] * qty;
+          } else if (config.itemWhitelist.genericPoints != null) {
+            earned += config.itemWhitelist.genericPoints * qty;
+          }
+        }
+
+        // 2) Fallback GP-based points (only if none from whitelist)
+        if (earned === 0 && value) {
+          const gp = Number(value);
+          if (gp >= config.loot.minValueThreshold) {
+            const millions = Math.round(gp / config.loot.fallbackUnitValue);
+            earned = millions * config.loot.fallbackPointsPerUnit;
+            // Cap per-drop
+            earned = Math.min(earned, config.loot.maxPointsPerDrop);
+          }
+        }
+
+      } else if (title === 'Pet Drop') {
+        earned = config.pet.points;
+      }
+
+      if (earned > 0) {
+        const { total, rank, leveledUp } = await addPoints(player, earned);
+        console.log(`${player} earned ${earned} points (total: ${total}).`);
+        if (leveledUp) {
+          console.log(`${player} just ranked up to ${rank}!`);
+          // Optional: assign Discord role here…
+        }
+      }
+      // ───────────────────────────────────────────────
+
+    } catch (err) {
+      console.error('Error parsing/saving embed:', err);
     }
   }
 });

@@ -2,10 +2,10 @@
 const { readRows, updateCell, appendRow } = require('./sheets/googleSheetsClient');
 const config = require('./pointsConfig.json');
 
-// Reads/updates the "Points" tab: headers are [Player, Points, Rank]
+// Ensures you have a "Points" tab with headers: Player | Points | Rank
 async function addPoints(player, pointsToAdd) {
   const rows = await readRows('Points');
-  const idx = rows.findIndex(r => r[0] === player);
+  const idx  = rows.findIndex(r => r[0] === player);
   let total = pointsToAdd;
 
   if (idx !== -1) {
@@ -15,21 +15,18 @@ async function addPoints(player, pointsToAdd) {
     await appendRow('Points', [player, total, '']);
   }
 
-  // Determine new rank
+  // Determine which rank they now qualify for
   const rank = config.ranks
     .slice().reverse()
     .find(r => total >= r.minPoints)?.name || '';
-  
-  // Update rank cell if it changed
-  if (idx !== -1 && rows[idx][2] !== rank) {
-    await updateCell('Points', idx + 1, 3, rank);
+
+  // Update rank cell if it changed (or set it for new players)
+  if ((idx !== -1 && rows[idx][2] !== rank) || idx === -1) {
+    const rowIndex = idx !== -1 ? idx + 1 : rows.length + 1;
+    await updateCell('Points', rowIndex, 3, rank);
     return { total, rank, leveledUp: true };
   }
-  if (idx === -1) {
-    const newRow = rows.length + 1;
-    await updateCell('Points', newRow, 3, rank);
-    return { total, rank, leveledUp: true };
-  }
+
   return { total, rank, leveledUp: false };
 }
 
