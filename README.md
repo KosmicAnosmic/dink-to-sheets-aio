@@ -11,8 +11,9 @@ tl;dr:
 3. Edit pointsConfig.json to your liking
 
 4. run
-   >npm run dev 
-   in powershell from your project folder and, assuming all variables are in     place, it should spin up and start watching your discord channels for dink    notifications to push!
+   >npm run dev
+   
+   in powershell from your project folder and, assuming all variables are in     place, it should spin up     and start watching your discord channels for dink    notifications to push!
 
 
 
